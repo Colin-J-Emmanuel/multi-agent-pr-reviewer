@@ -1,5 +1,66 @@
-# Byte-compiled
+# ---- Python bytecode ----
 __pycache__/
+*.py[cod]
+*$py.class
+*.so
 
-# Environments
+# ---- Packaging / build ----
+.Python
+build/
+dist/
+downloads/
+eggs/
+.eggs/
+sdist/
+wheels/
+*.egg-info/
+*.egg
+MANIFEST
+
+# ---- Virtual environments ----
+.venv/
+venv/
+env/
+ENV/
+.python-version
+
+# ---- Secrets / env ----
 .env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# ---- Testing / coverage ----
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+coverage.xml
+.tox/
+.nox/
+.cache/
+
+# ---- Type checkers / linters ----
+.mypy_cache/
+.dmypy.json
+.ruff_cache/
+.pyre/
+
+# ---- Jupyter ----
+.ipynb_checkpoints/
+
+# ---- IDEs / editors ----
+.vscode/
+.idea/
+*.swp
+*~
+
+# ---- OS ----
+.DS_Store
+._*
+Thumbs.db
+
+# ---- Logs ----
+*.log
+logs/
