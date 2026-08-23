@@ -4,11 +4,20 @@ import logging
 import os
 
 from fastapi import FastAPI, Request, Header, HTTPException, status
+from contextlib import asynccontextmanager
+from arq import create_pool
+from app.queue import REDIS_SETTINGS
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("pr-reviewer")
 
-app = FastAPI(title="Multi-Agent PR Reviewer")
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    app.state.arq = await create_pool(REDIS_SETTINGS)
+    yield
+    await app.state.arq.close()
+
+app = FastAPI(title="Multi-Agent PR Reviewer", lifespan=lifespan)
 
 WEBHOOK_SECRET = os.environ["GITHUB_WEBHOOK_SECRET"].encode()
 RELEVANT_ACTIONS = {"opened", "synchronize", "reopened"}
@@ -48,5 +57,12 @@ async def github_webhook(
         "head_sha": pr["head"]["sha"],
     }
     # Phase 2: enqueue this to Redis; a worker does the slow LLM work off the request path.
-    logger.info("Accepted PR job (would enqueue): %s", job)
+    redis = request.app.state.arq
+    # SET NX returns True only the first time we see this delivery id → dedupe.
+    is_new = await redis.set(f"delivery:{x_github_delivery}", "1", ex=86_400, nx=True)
+    if not is_new:
+        return {"status": "duplicate", "delivery_id": x_github_delivery}
+
+    await redis.enqueue_job("review_pr", job)
+    logger.info("Enqueued PR job: %s", job)
     return {"status": "accepted", "delivery_id": x_github_delivery}
