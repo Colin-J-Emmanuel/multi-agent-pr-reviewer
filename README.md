@@ -153,7 +153,7 @@ Architecture inspired by the freeCodeCamp course *"Learn System Design for AI Ag
 
 ## License
 
-MIT — see [`LICENSE`](LICENSE).
+  © 2026 Colin Emmanuel. All rights reserved. This is a personal learning project and is not licensed for reuse.
 
 ## Author
 
