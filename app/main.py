@@ -1,12 +1,13 @@
 import hashlib
 import hmac
 import logging
-import os
+# import os
 
 from fastapi import FastAPI, Request, Header, HTTPException, status
 from contextlib import asynccontextmanager
 from arq import create_pool
 from app.queue import REDIS_SETTINGS
+from app.config import get_settings
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("pr-reviewer")
@@ -19,7 +20,9 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="Multi-Agent PR Reviewer", lifespan=lifespan)
 
-WEBHOOK_SECRET = os.environ["GITHUB_WEBHOOK_SECRET"].encode()
+# WEBHOOK_SECRET = os.environ["GITHUB_WEBHOOK_SECRET"].encode()
+settings = get_settings()
+WEBHOOK_SECRET = settings.github_webhook_secret.encode()
 RELEVANT_ACTIONS = {"opened", "synchronize", "reopened"}
 
 
