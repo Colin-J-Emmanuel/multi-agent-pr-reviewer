@@ -49,7 +49,7 @@ Two ideas carry the design:
 |-------|-----------|-------|
 | 1 | Webhook ingestion — HMAC-SHA256 verification, event/action filtering, fast `202` ack | ✅ Built & tested |
 | 2 | Async pipeline — Redis queue, idempotent enqueue (`SET NX`), ARQ worker | ✅ Built & tested |
-| 3 | PR context fetch — GitHub API diff + changed files | 🔲 Planned |
+| 3 | PR context fetch — GitHub API diff + changed files | ✅ Built & tested |
 | 4 | Multi-agent graph — LangGraph specialists + aggregator + confidence scoring | 🔲 Planned |
 | 5 | Unified data layer — Postgres (relational + pgvector + time-series) | 🔲 Planned |
 | 6 | Results + approval gates — post comments, confidence-threshold review queue | 🔲 Planned |
