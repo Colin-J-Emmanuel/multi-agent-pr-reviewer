@@ -4,3 +4,5 @@ arq==0.28.0
 redis==5.3.1
 pydantic-settings==2.15.0
 httpx==0.28.1
+langgraph==1.2.11
+langchain-anthropic==1.7.0

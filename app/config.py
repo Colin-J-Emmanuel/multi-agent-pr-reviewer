@@ -6,6 +6,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class Settings(BaseSettings):
     github_webhook_secret: str                     # required — app won't boot without it
     github_token: str | None = None                # optional until 3b actually fetches
+    anthropic_api_key: str | None = None           # optional — only the worker needs it
     redis_url: str = "redis://localhost:6379"
 
     model_config = SettingsConfigDict(
