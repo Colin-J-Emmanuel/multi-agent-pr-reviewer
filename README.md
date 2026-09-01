@@ -66,7 +66,7 @@ The project is built brick by brick — each step is implemented and tested in i
 - **3b — GitHub API client.** Fetches PR metadata + changed files; a deliberate *diff budget* (cap file count, skip generated/vendored paths, truncate oversized patches); typed error handling (`401`/`403`/`404`/rate-limit → `GitHubError`). Tested in isolation against a real PR, plus a `404` failure path.
 - **3c — Wire into the worker.** `review_pr` calls `GitHubClient().fetch_pr()`, catches `GitHubError`, and re-raises so ARQ marks the job failed rather than swallowing it. Proven end to end: webhook → queue → worker → live GitHub fetch.
 
-### Phase 4 — Multi-agent graph — 4a ✅ / 4b 🔲
+### Phase 4 — Multi-agent graph — 4a ✅ / 4b ✅
 *Files: `app/graph.py`, `scripts/test_security_agent.py`, `app/config.py`, `app/worker.py`*
 
 - **4a — Single agent, end to end ✅**
