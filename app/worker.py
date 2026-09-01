@@ -25,14 +25,19 @@ async def review_pr(ctx, job: dict):
     # Phase 4: hand `context` to the agent graph.
     # inside review_pr, after you have `context`:
     initial_state: PRState = {"context": context, "findings": []}
-    result = await review_graph.ainvoke(initial_state)
-    findings = result["findings"]
+    result = await review_graph.ainvoke({
+        "context": context, "findings": [],
+        "high_findings": [], "low_findings": [], "summary": "",
+    })
+    high = result["high_findings"]
+    low = result["low_findings"]
 
-    logger.info("Review complete for %s#%s — %d finding(s)", repo, pr_number, len(findings))
-    for f in findings:
-        logger.info("  [%s] %s (%.2f) — %s", f.severity, f.file, f.confidence, f.message)
+    logger.info("Review of %s#%s — %d high, %d demoted", repo, pr_number, len(high), len(low))
+    logger.info("Summary: %s", result["summary"])
+    for f in high:
+        logger.info("  [%s/%s] %s (%.2f) — %s", f.category, f.severity, f.file, f.confidence, f.message)
 
-    return {"pr_number": pr_number, "findings_count": len(findings)}
+    return {"pr_number": pr_number, "high": len(high), "low": len(low)}
 
 
 class WorkerSettings:

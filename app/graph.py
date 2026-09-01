@@ -20,8 +20,12 @@ class Finding(BaseModel):
     message: str = Field(description="What the issue is and why it matters")
 
 class PRState(TypedDict):
-    context: dict                              # the PR data from GitHubClient.fetch_pr()
-    findings: Annotated[list[Finding], add]    # agents append here; reducer keeps all
+    context: dict
+    findings: Annotated[list[Finding], add]
+    # aggregator outputs (written once, so no reducer):
+    high_findings: list[Finding]
+    low_findings: list[Finding]
+    summary: str
 
 class AgentResponse(BaseModel):
     findings: list[Finding]      # the wrapper — what Claude actually fills in
@@ -41,46 +45,142 @@ def _format_diff(context: dict) -> str:
         parts.append(f.get("patch") or "(no textual diff available)")
     return "\n".join(parts)
 
-SECURITY_SYSTEM_PROMPT = """You are a security-focused code reviewer examining a GitHub pull request diff.
+_CONFIDENCE_RUBRIC = """
 
-Report ONLY genuine security concerns: injection risks, hardcoded secrets or credentials, unsafe deserialization, missing auth/authorization checks, path traversal, unsafe handling of user input, or weak/insecure cryptography. Do NOT report style, formatting, or non-security bugs — other reviewers cover those.
+Set `confidence` honestly: use values near 1.0 only when you can point to the exact line and are certain; use lower values when you suspect an issue but cannot fully verify it from the diff alone. Never inflate confidence. If the diff shows no issues in your domain, return an empty findings list — a clean result is a valid, useful answer."""
 
-Set `confidence` honestly. Use values near 1.0 only when you can point to the exact vulnerable line and are certain; use lower values when you suspect an issue but cannot fully verify it from the diff alone. Never inflate confidence.
+SECURITY_PROMPT = """You are a security-focused reviewer examining a GitHub pull request diff.
+Report ONLY genuine security concerns: injection, hardcoded secrets or credentials, unsafe deserialization, missing auth/authorization, path traversal, unsafe handling of user input, or weak cryptography. Ignore style, tests, and docs — other reviewers cover those.""" + _CONFIDENCE_RUBRIC
 
-If the diff shows no security issues, return an empty findings list — a clean result is a valid, useful answer. Every finding you return must use category "security"."""
+QUALITY_PROMPT = """You are a code-quality reviewer examining a GitHub pull request diff.
+Report ONLY maintainability and correctness concerns: logic bugs, unhandled errors or edge cases, resource leaks, confusing or misleading names, dead code, needless complexity, or copy-paste duplication. Ignore security, tests, and docs.""" + _CONFIDENCE_RUBRIC
 
-async def security_agent(state: PRState) -> dict:
-    context = state["context"]
+TESTING_PROMPT = """You are a testing reviewer examining a GitHub pull request diff.
+Report ONLY testing gaps: new or changed logic left untested, missing edge-case or error-path tests, assertions that don't actually verify behavior, or tests that were removed or weakened. Ignore security, general quality, and docs.""" + _CONFIDENCE_RUBRIC
+
+DOCS_PROMPT = """You are a documentation reviewer examining a GitHub pull request diff.
+Report ONLY documentation concerns: public functions, classes, or APIs changed without updated docstrings; comments that are now misleading or inaccurate; or user-facing changes not reflected in the README or docs. Ignore security, quality, and tests.""" + _CONFIDENCE_RUBRIC
+
+def make_agent(name: str, category: str, system_prompt: str):
+    """Build an agent node: same machinery, different prompt and category."""
+
+    async def agent(state: PRState) -> dict:
+        context = state["context"]
+        settings = get_settings()
+        if not settings.anthropic_api_key:
+            raise RuntimeError(
+                "ANTHROPIC_API_KEY is not set — agents need it to call Claude."
+            )
+
+        model = ChatAnthropic(
+            model=MODEL,
+            api_key=settings.anthropic_api_key,
+            max_tokens=2000,
+        ).with_structured_output(AgentResponse)
+
+        logger.info("%s agent reviewing %s#%s", name, context["repo"], context["pr_number"])
+        response = await model.ainvoke([
+            ("system", system_prompt),
+            ("human", _format_diff(context)),
+        ])
+
+        # Force-stamp the domain — don't trust the model to label its own category.
+        findings = [f.model_copy(update={"category": category}) for f in response.findings]
+        logger.info("%s agent found %d issue(s)", name, len(findings))
+        return {"findings": findings}
+
+    agent.__name__ = f"{name}_agent"      # nicer name in logs / traces
+    return agent
+
+
+security_agent = make_agent("security", "security", SECURITY_PROMPT)
+quality_agent = make_agent("quality", "quality", QUALITY_PROMPT)
+testing_agent = make_agent("testing", "testing", TESTING_PROMPT)
+docs_agent = make_agent("docs", "docs", DOCS_PROMPT)
+
+HIGH_CONFIDENCE = 0.7
+NOISE_FLOOR = 0.3
+
+
+def _dedupe(findings: list[Finding]) -> list[Finding]:
+    """Collapse findings that point at the same file+line+category."""
+    seen, unique = set(), []
+    for f in findings:
+        key = (f.file, f.line, f.category)
+        if key not in seen:
+            seen.add(key)
+            unique.append(f)
+    return unique
+
+
+def _sort_key(f: Finding):
+    order = {"high": 0, "medium": 1, "low": 2}
+    return (order[f.severity], -f.confidence)   # severe first, then most confident
+
+async def aggregator(state: PRState) -> dict:
+    findings = _dedupe(state["findings"])
+
+    high = sorted([f for f in findings if f.confidence >= HIGH_CONFIDENCE], key=_sort_key)
+    low = sorted(
+        [f for f in findings if NOISE_FLOOR <= f.confidence < HIGH_CONFIDENCE],
+        key=_sort_key,
+    )
+    # below NOISE_FLOOR is dropped entirely
+    dropped = len(findings) - len(high) - len(low)
+
+    logger.info(
+        "Aggregated: %d high, %d low-confidence, %d dropped as noise",
+        len(high), len(low), dropped,
+    )
+
+    summary = await _summarize(state["context"], high, low)
+    return {"high_findings": high, "low_findings": low, "summary": summary}
+
+SUMMARY_PROMPT = """You are the lead reviewer writing a short summary of a PR review.
+You are given findings already triaged by specialist agents. Write 2–4 sentences for the PR author: lead with the most important issues, be direct and specific, and don't invent problems not in the findings. If there are no high-confidence findings, say the PR looks clean and note any minor points briefly."""
+
+
+def _render_findings(high: list[Finding], low: list[Finding]) -> str:
+    lines = ["High-confidence findings:"]
+    lines += [f"- [{f.severity}] {f.file}: {f.message}" for f in high] or ["- (none)"]
+    lines.append("\nLow-confidence (demoted) findings:")
+    lines += [f"- [{f.severity}] {f.file}: {f.message}" for f in low] or ["- (none)"]
+    return "\n".join(lines)
+
+
+async def _summarize(context: dict, high: list[Finding], low: list[Finding]) -> str:
     settings = get_settings()
     if not settings.anthropic_api_key:
-        raise RuntimeError(
-            "ANTHROPIC_API_KEY is not set — the security agent needs it to call Claude."
-        )
-
-    model = ChatAnthropic(
-        model=MODEL,
-        api_key=settings.anthropic_api_key,
-        max_tokens=2000,
-    ).with_structured_output(AgentResponse)
-
-    logger.info("Security agent reviewing %s#%s", context["repo"], context["pr_number"])
-    response = await model.ainvoke([
-        ("system", SECURITY_SYSTEM_PROMPT),
-        ("human", _format_diff(context)),
-    ])
-
-    # Safety by construction: this is the security agent, so its findings are security —
-    # don't trust the model to always label its own domain correctly.
-    findings = [f.model_copy(update={"category": "security"}) for f in response.findings]
-    logger.info("Security agent found %d issue(s)", len(findings))
-    return {"findings": findings}
-
+        return "(summary unavailable — no API key)"
+    try:
+        model = ChatAnthropic(model=MODEL, api_key=settings.anthropic_api_key, max_tokens=500)
+        resp = await model.ainvoke([
+            ("system", SUMMARY_PROMPT),
+            ("human", f"PR: {context.get('title','')}\n\n{_render_findings(high, low)}"),
+        ])
+        return resp.content
+    except Exception as e:
+        logger.warning("Summary generation failed: %s", e)
+        return "(summary generation failed)"
+    
 def build_review_graph():
     builder = StateGraph(PRState)
-    builder.add_node("security", security_agent)
-    builder.add_edge(START, "security")
-    builder.add_edge("security", END)
+
+    agents = {
+        "security": security_agent,
+        "quality": quality_agent,
+        "testing": testing_agent,
+        "docs": docs_agent,
+    }
+    for name, node in agents.items():
+        builder.add_node(name, node)
+        builder.add_edge(START, name)          # fan-out
+        builder.add_edge(name, "aggregate")    # fan-in → converge on aggregator
+
+    builder.add_node("aggregate", aggregator)
+    builder.add_edge("aggregate", END)
+
     return builder.compile()
 
 
-review_graph = build_review_graph()      # compiled once at import, reused per job
+review_graph = build_review_graph()
