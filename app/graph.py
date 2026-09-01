@@ -4,6 +4,7 @@ from app.config import get_settings
 from typing import Annotated, Literal, TypedDict
 from operator import add
 from pydantic import BaseModel, Field
+from langgraph.graph import StateGraph, START, END
 
 logger = logging.getLogger("pr-reviewer.agents")
 MODEL = "claude-sonnet-5"        # balance of cost/quality; haiku=cheaper, opus=sharper
@@ -73,3 +74,13 @@ async def security_agent(state: PRState) -> dict:
     findings = [f.model_copy(update={"category": "security"}) for f in response.findings]
     logger.info("Security agent found %d issue(s)", len(findings))
     return {"findings": findings}
+
+def build_review_graph():
+    builder = StateGraph(PRState)
+    builder.add_node("security", security_agent)
+    builder.add_edge(START, "security")
+    builder.add_edge("security", END)
+    return builder.compile()
+
+
+review_graph = build_review_graph()      # compiled once at import, reused per job

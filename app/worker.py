@@ -1,6 +1,7 @@
 import logging
 from app.queue import REDIS_SETTINGS
 from app.github_client import GitHubClient, GitHubError
+from app.graph import review_graph, PRState
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("pr-reviewer.worker")
@@ -22,7 +23,16 @@ async def review_pr(ctx, job: dict):
         context["title"], context["author"], context["files_returned"],
     )
     # Phase 4: hand `context` to the agent graph.
-    return {"pr_number": pr_number, "files_reviewed": context["files_returned"]}
+    # inside review_pr, after you have `context`:
+    initial_state: PRState = {"context": context, "findings": []}
+    result = await review_graph.ainvoke(initial_state)
+    findings = result["findings"]
+
+    logger.info("Review complete for %s#%s — %d finding(s)", repo, pr_number, len(findings))
+    for f in findings:
+        logger.info("  [%s] %s (%.2f) — %s", f.severity, f.file, f.confidence, f.message)
+
+    return {"pr_number": pr_number, "findings_count": len(findings)}
 
 
 class WorkerSettings:

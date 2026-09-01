@@ -20,7 +20,7 @@ def send(label: str, body: bytes, headers: dict) -> None:
 
 payload = {
     "action": "opened",
-    "pull_request": {"number": 1, "head": {"sha": "abc123"}},
+    "pull_request": {"number": 2, "head": {"sha": "abc123"}},
     "repository": {"full_name": "Colin-J-Emmanuel/multi-agent-pr-reviewer"},
 }
 body = json.dumps(payload).encode()
