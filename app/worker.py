@@ -2,6 +2,7 @@ import logging
 from app.queue import REDIS_SETTINGS
 from app.github_client import GitHubClient, GitHubError
 from app.graph import review_graph, PRState
+from app.db import get_pool, close_pool, save_review
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("pr-reviewer.worker")
@@ -36,10 +37,29 @@ async def review_pr(ctx, job: dict):
     logger.info("Summary: %s", result["summary"])
     for f in high:
         logger.info("  [%s/%s] %s (%.2f) — %s", f.category, f.severity, f.file, f.confidence, f.message)
+    
+    await save_review(
+        repo=repo,
+        pr_number=pr_number,
+        delivery_id=job["delivery_id"],
+        head_sha=job.get("head_sha"),
+        title=context.get("title"),
+        author=context.get("author"),
+        summary=result["summary"],
+        high=high,
+        low=low,
+    )
 
     return {"pr_number": pr_number, "high": len(high), "low": len(low)}
 
+async def startup(ctx):
+    ctx["db"] = await get_pool()
+
+async def shutdown(ctx):
+    await close_pool()
 
 class WorkerSettings:
     functions = [review_pr]
     redis_settings = REDIS_SETTINGS
+    on_startup = startup          # open the pool once when the worker starts
+    on_shutdown = shutdown        # close it cleanly on exit

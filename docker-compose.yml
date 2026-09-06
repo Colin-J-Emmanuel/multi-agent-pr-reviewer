@@ -4,3 +4,18 @@ services:
     container_name: pr-reviewer-redis
     ports:
       - "6379:6379"
+
+  postgres:
+    image: pgvector/pgvector:pg17
+    container_name: pr-reviewer-postgres
+    environment:
+      POSTGRES_USER: pruser
+      POSTGRES_PASSWORD: prpass
+      POSTGRES_DB: prreviewer
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data      # persist data across restarts
+
+volumes:
+  pgdata:
