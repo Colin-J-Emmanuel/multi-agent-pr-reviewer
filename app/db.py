@@ -1,10 +1,9 @@
 import logging
-from typing import Any
-
 import asyncpg
 
 from app.config import get_settings
 from app.graph import Finding
+from app.embeddings import embed_texts, finding_text
 
 logger = logging.getLogger("pr-reviewer.db")
 
@@ -90,7 +89,7 @@ async def save_review(
     pool = await get_pool()
     async with pool.acquire() as conn:
         async with conn.transaction():
-            delivery_pk = await conn.fetchval(
+            delivery_pk = await conn.execute(
                 """
                 UPDATE deliveries
                    SET status = 'done', summary = $2, updated_at = now()
@@ -105,26 +104,53 @@ async def save_review(
             )
             delivery_pk, pr_id = row["id"], row["pull_request_id"]
 
-            # Backfill PR metadata now that we've fetched it.
             await conn.execute(
                 "UPDATE pull_requests SET title = $2, author = $3 WHERE id = $1",
                 pr_id, title, author,
             )
 
+            pairs = [(tier, f)
+                     for tier, findings in (("high", high), ("low", low))
+                     for f in findings]
+
+            vectors = embed_texts(
+                [finding_text(f.category, f.file, f.message) for _, f in pairs]
+            )
+
             rows = [
                 (delivery_pk, f.file, f.line, f.category, f.severity,
-                 f.confidence, f.message, tier)
-                for tier, findings in (("high", high), ("low", low))
-                for f in findings
+                 f.confidence, f.message, tier, str(vec))
+                for (tier, f), vec in zip(pairs, vectors)
             ]
             if rows:
                 await conn.executemany(
                     """
                     INSERT INTO findings
                         (delivery_id, file, line, category, severity,
-                         confidence, message, tier)
-                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+                         confidence, message, tier, embedding)
+                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
                     """,
                     rows,
                 )
     logger.info("Delivery %s done: %d high, %d low", delivery_id, len(high), len(low))
+
+async def search_similar_findings(query: str, limit: int = 5) -> list[dict]:
+    """Find past findings semantically similar to a query string."""
+    vector = embed_texts([query])[0]
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            """
+            SELECT f.category, f.severity, f.file, f.message, f.tier,
+                   pr.repo, pr.pr_number,
+                   f.embedding <=> $1 AS distance
+              FROM findings f
+              JOIN deliveries d ON f.delivery_id = d.id
+              JOIN pull_requests pr ON d.pull_request_id = pr.id
+             WHERE f.embedding IS NOT NULL
+             ORDER BY f.embedding <=> $1
+             LIMIT $2
+            """,
+            str(vector), limit,
+        )
+    return [dict(r) for r in rows]
