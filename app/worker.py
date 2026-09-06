@@ -3,6 +3,7 @@ from app.queue import REDIS_SETTINGS
 from app.github_client import GitHubClient, GitHubError
 from app.graph import review_graph, PRState
 from app.db import get_pool, close_pool, save_review, mark_in_progress, mark_failed
+from app.render import render_comment
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("pr-reviewer.worker")
@@ -48,6 +49,16 @@ async def review_pr(ctx, job: dict):
             summary=result["summary"],
             high=high, low=low,
         )
+
+        client = GitHubClient()
+        body = render_comment(result["summary"], high, len(low))
+        existing = await client.find_our_comment(repo, pr_number)
+        if existing:
+            comment_id = await client.update_comment(repo, existing, body)
+            logger.info("Updated existing review comment %s", comment_id)
+        else:
+            comment_id = await client.post_comment(repo, pr_number, body)
+            logger.info("Posted new review comment %s", comment_id)
 
     except Exception as e:
         await mark_failed(delivery_id, str(e))

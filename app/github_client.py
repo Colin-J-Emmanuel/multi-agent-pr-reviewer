@@ -9,6 +9,7 @@ logger = logging.getLogger("pr-reviewer.github")
 
 GITHUB_API = "https://api.github.com"
 API_VERSION = "2022-11-28"
+MARKER = "<!-- multi-agent-pr-reviewer -->"
 
 # --- Design knobs: what the reviewer pays attention to ---
 MAX_FILES = 50            # cap files reviewed per PR
@@ -70,6 +71,19 @@ class GitHubClient:
         resp.raise_for_status()
         return resp.json()
 
+    async def _request(self, client: httpx.AsyncClient, method: str, path: str, **kwargs) -> Any:
+        resp = await client.request(method, path, **kwargs)
+        if resp.status_code == 401:
+            raise GitHubError("401 Unauthorized — token is invalid or expired.")
+        if resp.status_code == 403:
+            raise GitHubError(
+                f"403 Forbidden: {path} — token may lack 'Pull requests: write'."
+            )
+        if resp.status_code == 404:
+            raise GitHubError(f"404 Not Found: {path}")
+        resp.raise_for_status()
+        return resp.json()
+    
     async def fetch_pr(self, repo: str, pr_number: int) -> dict[str, Any]:
         async with httpx.AsyncClient(
             base_url=GITHUB_API, headers=self._headers, timeout=20
@@ -113,3 +127,37 @@ class GitHubClient:
             "files_skipped": skipped,
             "files": files,
         }
+    
+    async def find_our_comment(self, repo: str, pr_number: int) -> int | None:
+        """Return the id of a comment we previously posted, if any."""
+        async with httpx.AsyncClient(
+            base_url=GITHUB_API, headers=self._headers, timeout=20
+        ) as client:
+            comments = await self._request(
+                client, "GET", f"/repos/{repo}/issues/{pr_number}/comments",
+                params={"per_page": 100},
+            )
+        for c in comments:
+            if MARKER in (c.get("body") or ""):
+                return c["id"]
+        return None
+
+    async def post_comment(self, repo: str, pr_number: int, body: str) -> int:
+        async with httpx.AsyncClient(
+            base_url=GITHUB_API, headers=self._headers, timeout=20
+        ) as client:
+            created = await self._request(
+                client, "POST", f"/repos/{repo}/issues/{pr_number}/comments",
+                json={"body": body},
+            )
+        return created["id"]
+
+    async def update_comment(self, repo: str, comment_id: int, body: str) -> int:
+        async with httpx.AsyncClient(
+            base_url=GITHUB_API, headers=self._headers, timeout=20
+        ) as client:
+            updated = await self._request(
+                client, "PATCH", f"/repos/{repo}/issues/comments/{comment_id}",
+                json={"body": body},
+            )
+        return updated["id"]
