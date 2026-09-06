@@ -154,3 +154,16 @@ async def search_similar_findings(query: str, limit: int = 5) -> list[dict]:
             str(vector), limit,
         )
     return [dict(r) for r in rows]
+
+async def mark_posted(delivery_id: str, comment_id: int) -> None:
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        await conn.execute(
+            """
+            UPDATE deliveries
+                SET comment_id = $2, posted_at = now(), updated_at = now()
+            WHERE delivery_id = $1
+            """,
+            delivery_id, comment_id,
+        )
+    logger.info("Delivery %s posted as comment %s", delivery_id, comment_id)

@@ -28,7 +28,7 @@ sig = "sha256=" + hmac.new(SECRET, body, hashlib.sha256).hexdigest()
 headers = {
     "Content-Type": "application/json",
     "X-GitHub-Event": "pull_request",
-    "X-GitHub-Delivery": "test-delivery-007",
+    "X-GitHub-Delivery": "test-delivery-008",
     "X-Hub-Signature-256": sig,
 }
 

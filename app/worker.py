@@ -2,7 +2,7 @@ import logging
 from app.queue import REDIS_SETTINGS
 from app.github_client import GitHubClient, GitHubError
 from app.graph import review_graph, PRState
-from app.db import get_pool, close_pool, save_review, mark_in_progress, mark_failed
+from app.db import get_pool, close_pool, save_review, mark_in_progress, mark_failed, mark_posted
 from app.render import render_comment
 
 logging.basicConfig(level=logging.INFO)
@@ -59,6 +59,8 @@ async def review_pr(ctx, job: dict):
         else:
             comment_id = await client.post_comment(repo, pr_number, body)
             logger.info("Posted new review comment %s", comment_id)
+
+        await mark_posted(delivery_id, comment_id)
 
     except Exception as e:
         await mark_failed(delivery_id, str(e))
