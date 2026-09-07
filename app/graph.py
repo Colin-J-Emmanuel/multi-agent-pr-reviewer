@@ -8,6 +8,9 @@ from langgraph.graph import StateGraph, START, END
 
 logger = logging.getLogger("pr-reviewer.agents")
 MODEL = "claude-sonnet-5"        # balance of cost/quality; haiku=cheaper, opus=sharper
+# Verify against current Anthropic pricing — these are $ per million tokens.
+PRICE_INPUT_PER_M = 2.00
+PRICE_OUTPUT_PER_M = 10.00
 
 class Finding(BaseModel):
     file: str = Field(description="Path of the file the issue is in")
@@ -23,12 +26,17 @@ class PRState(TypedDict):
     context: dict
     findings: Annotated[list[Finding], add]
     # aggregator outputs (written once, so no reducer):
+    usage: Annotated[list[dict], add] # one record per LLM call
     high_findings: list[Finding]
     low_findings: list[Finding]
     summary: str
 
 class AgentResponse(BaseModel):
     findings: list[Finding]      # the wrapper — what Claude actually fills in
+
+def compute_cost(input_tokens: int, output_tokens: int) -> float:
+    return (input_tokens * PRICE_INPUT_PER_M
+            + output_tokens * PRICE_OUTPUT_PER_M) / 1_000_000
 
 def _format_diff(context: dict) -> str:
     parts = [
@@ -44,6 +52,15 @@ def _format_diff(context: dict) -> str:
         )
         parts.append(f.get("patch") or "(no textual diff available)")
     return "\n".join(parts)
+
+def _extract_usage(node: str, raw) -> dict:
+    """Pull token counts off a raw AIMessage; degrade gracefully if absent."""
+    meta = getattr(raw, "usage_metadata", None) or {}
+    return {
+        "node": node,
+        "input_tokens": meta.get("input_tokens", 0),
+        "output_tokens": meta.get("output_tokens", 0),
+    }
 
 _CONFIDENCE_RUBRIC = """
 
@@ -76,7 +93,7 @@ def make_agent(name: str, category: str, system_prompt: str):
             model=MODEL,
             api_key=settings.anthropic_api_key,
             max_tokens=2000,
-        ).with_structured_output(AgentResponse)
+        ).with_structured_output(AgentResponse, include_raw=True)
 
         logger.info("%s agent reviewing %s#%s", name, context["repo"], context["pr_number"])
         response = await model.ainvoke([
@@ -84,10 +101,13 @@ def make_agent(name: str, category: str, system_prompt: str):
             ("human", _format_diff(context)),
         ])
 
+        parsed = response["parsed"]
+        usage = _extract_usage(name, response["raw"])
+
         # Force-stamp the domain — don't trust the model to label its own category.
-        findings = [f.model_copy(update={"category": category}) for f in response.findings]
+        findings = [f.model_copy(update={"category": category}) for f in parsed.findings]
         logger.info("%s agent found %d issue(s)", name, len(findings))
-        return {"findings": findings}
+        return {"findings": findings, "usage": [usage]}
 
     agent.__name__ = f"{name}_agent"      # nicer name in logs / traces
     return agent
@@ -117,6 +137,31 @@ def _sort_key(f: Finding):
     order = {"high": 0, "medium": 1, "low": 2}
     return (order[f.severity], -f.confidence)   # severe first, then most confident
 
+SUMMARY_PROMPT = """You are the lead reviewer writing a short summary of a PR review.
+You are given findings already triaged by specialist agents. Write 2–4 sentences for the PR author: lead with the most important issues, be direct and specific, and don't invent problems not in the findings. If there are no high-confidence findings, say the PR looks clean and note any minor points briefly."""
+
+def _render_findings(high: list[Finding], low: list[Finding]) -> str:
+    lines = ["High-confidence findings:"]
+    lines += [f"- [{f.severity}] {f.file}: {f.message}" for f in high] or ["- (none)"]
+    lines.append("\nLow-confidence (demoted) findings:")
+    lines += [f"- [{f.severity}] {f.file}: {f.message}" for f in low] or ["- (none)"]
+    return "\n".join(lines)
+
+async def _summarize(context, high: list[Finding], low: list[Finding]) -> tuple[str, dict]:
+    settings = get_settings()
+    if not settings.anthropic_api_key:
+        return "(summary unavailable — no API key)", _extract_usage("aggregate", None)
+    try:
+        model = ChatAnthropic(model=MODEL, api_key=settings.anthropic_api_key, max_tokens=500)
+        resp = await model.ainvoke([
+            ("system", SUMMARY_PROMPT),
+            ("human", f"PR: {context.get('title','')}\n\n{_render_findings(high, low)}"),
+        ])
+        return resp.content, _extract_usage("aggregate", resp)
+    except Exception as e:
+        logger.warning("Summary generation failed: %s", e)
+        return "(summary generation failed)", _extract_usage("aggregate", None)
+    
 async def aggregator(state: PRState) -> dict:
     findings = _dedupe(state["findings"])
 
@@ -133,35 +178,13 @@ async def aggregator(state: PRState) -> dict:
         len(high), len(low), dropped,
     )
 
-    summary = await _summarize(state["context"], high, low)
-    return {"high_findings": high, "low_findings": low, "summary": summary}
-
-SUMMARY_PROMPT = """You are the lead reviewer writing a short summary of a PR review.
-You are given findings already triaged by specialist agents. Write 2–4 sentences for the PR author: lead with the most important issues, be direct and specific, and don't invent problems not in the findings. If there are no high-confidence findings, say the PR looks clean and note any minor points briefly."""
-
-
-def _render_findings(high: list[Finding], low: list[Finding]) -> str:
-    lines = ["High-confidence findings:"]
-    lines += [f"- [{f.severity}] {f.file}: {f.message}" for f in high] or ["- (none)"]
-    lines.append("\nLow-confidence (demoted) findings:")
-    lines += [f"- [{f.severity}] {f.file}: {f.message}" for f in low] or ["- (none)"]
-    return "\n".join(lines)
-
-
-async def _summarize(context: dict, high: list[Finding], low: list[Finding]) -> str:
-    settings = get_settings()
-    if not settings.anthropic_api_key:
-        return "(summary unavailable — no API key)"
-    try:
-        model = ChatAnthropic(model=MODEL, api_key=settings.anthropic_api_key, max_tokens=500)
-        resp = await model.ainvoke([
-            ("system", SUMMARY_PROMPT),
-            ("human", f"PR: {context.get('title','')}\n\n{_render_findings(high, low)}"),
-        ])
-        return resp.content
-    except Exception as e:
-        logger.warning("Summary generation failed: %s", e)
-        return "(summary generation failed)"
+    summary, summary_usage = await _summarize(state["context"], high, low)
+    return {
+        "high_findings": high,
+        "low_findings": low,
+        "summary": summary,
+        "usage": [summary_usage],
+    }
     
 def build_review_graph():
     builder = StateGraph(PRState)

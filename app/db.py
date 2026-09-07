@@ -1,5 +1,6 @@
 import logging
 import asyncpg
+import json
 
 from app.config import get_settings
 from app.graph import Finding
@@ -84,19 +85,25 @@ async def save_review(
     summary: str,
     high: list[Finding],
     low: list[Finding],
+    input_tokens: int,
+    output_tokens: int,
+    cost_usd: float,
+    usage_detail: list[dict],
 ) -> None:
     """Complete a review: update the delivery to done and attach findings."""
     pool = await get_pool()
     async with pool.acquire() as conn:
         async with conn.transaction():
-            delivery_pk = await conn.execute(
+            await conn.execute(
                 """
                 UPDATE deliveries
-                   SET status = 'done', summary = $2, updated_at = now()
+                   SET status = 'done', summary = $2, updated_at = now(),
+                        input_tokens = $3, output_tokens = $4,
+                        cost_usd = $5, usage_detail = $6
                  WHERE delivery_id = $1
-                RETURNING id, pull_request_id
                 """,
-                delivery_id, summary,
+                delivery_id, summary, input_tokens, output_tokens,
+                cost_usd, json.dumps(usage_detail)
             )
             row = await conn.fetchrow(
                 "SELECT id, pull_request_id FROM deliveries WHERE delivery_id = $1",

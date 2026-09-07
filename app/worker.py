@@ -1,9 +1,11 @@
 import logging
+import os
 from app.queue import REDIS_SETTINGS
 from app.github_client import GitHubClient, GitHubError
-from app.graph import review_graph, PRState
+from app.graph import review_graph, PRState, compute_cost
 from app.db import get_pool, close_pool, save_review, mark_in_progress, mark_failed, mark_posted
 from app.render import render_comment
+from app.config import get_settings
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("pr-reviewer.worker")
@@ -30,11 +32,18 @@ async def review_pr(ctx, job: dict):
         )
 
         result = await review_graph.ainvoke({
-            "context": context, "findings": [],
+            "context": context, "findings": [], "usage": [],
             "high_findings": [], "low_findings": [], "summary": "",
         })
         high = result["high_findings"]
         low = result["low_findings"]
+        usage = result["usage"]
+
+        in_tok = sum(u["input_tokens"] for u in usage)
+        out_tok = sum(u["output_tokens"] for u in usage)
+        cost = compute_cost(in_tok, out_tok)
+        logger.info("Usage: %d in + %d out = %d tokens, $%.5f",
+                    in_tok, out_tok, in_tok + out_tok, cost)
 
         logger.info("Review of %s#%s — %d high, %d demoted",
                     repo, pr_number, len(high), len(low))
@@ -48,6 +57,10 @@ async def review_pr(ctx, job: dict):
             author=context.get("author"),
             summary=result["summary"],
             high=high, low=low,
+            input_tokens=in_tok,
+            output_tokens=out_tok,
+            cost_usd=cost,
+            usage_detail=usage
         )
 
         client = GitHubClient()
@@ -70,6 +83,12 @@ async def review_pr(ctx, job: dict):
     return {"pr_number": pr_number, "high": len(high), "low": len(low)}
 
 async def startup(ctx):
+    s = get_settings()
+    if s.langsmith_tracing and s.langsmith_api_key:
+        os.environ["LANGSMITH_TRACING"] = "true"
+        os.environ["LANGSMITH_API_KEY"] = s.langsmith_api_key
+        os.environ["LANGSMITH_PROJECT"] = s.langsmith_project
+        logger.info("LangSmith tracing enabled (project=%s)", s.langsmith_project)
     ctx["db"] = await get_pool()
 
 async def shutdown(ctx):

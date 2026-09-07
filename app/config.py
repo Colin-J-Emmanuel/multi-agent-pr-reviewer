@@ -9,6 +9,9 @@ class Settings(BaseSettings):
     anthropic_api_key: str | None = None           # optional — only the worker needs it
     database_url: str = "postgresql://pruser:prpass@localhost:5432/prreviewer"
     redis_url: str = "redis://localhost:6379"
+    langsmith_tracing: bool = False
+    langsmith_api_key: str | None = None
+    langsmith_project: str = "multi-agent-pr-reviewer"
 
     model_config = SettingsConfigDict(
         env_file=".env", env_file_encoding="utf-8", extra="ignore"
