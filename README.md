@@ -397,4 +397,4 @@ Architecture inspired by the freeCodeCamp course *"Learn System Design for AI Ag
 
 ## Author
 
-Colin Emmanuel — [@Colin-J-Emmanuel](https://github.com/Colin-J-Emmanuel) · c.j.emmanuel@columbia.edu
+Colin J. Emmanuel — [@Colin-J-Emmanuel](https://github.com/Colin-J-Emmanuel)
