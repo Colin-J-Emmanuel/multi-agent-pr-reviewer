@@ -1,15 +1,44 @@
 import logging
 import os
+import httpx
+
 from app.queue import REDIS_SETTINGS
 from app.github_client import GitHubClient, GitHubError
 from app.graph import review_graph, PRState, compute_cost
-from app.db import get_pool, close_pool, save_review, mark_in_progress, mark_failed, mark_posted
+from app.db import get_pool, close_pool, save_review, mark_in_progress, mark_failed, mark_posted, record_failure
 from app.render import render_comment
 from app.config import get_settings
+from app.github_client import GitHubError
+from arq import Retry
+
+MAX_RETRIES = 3
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("pr-reviewer.worker")
 
+# Substrings that mark a GitHubError as permanent (it wraps status codes in text).
+_PERMANENT_MARKERS = ("404 Not Found", "401 Unauthorized", "403 Forbidden")
+
+def classify_failure(exc: Exception) -> str:
+    """Return 'transient' (worth retrying) or 'permanent' (never will succeed)."""
+    # Network-level problems: the world was briefly unavailable.
+    if isinstance(exc, (httpx.TimeoutException, httpx.ConnectError, httpx.ReadError)):
+        return "transient"
+
+    # Upstream server errors and rate limits.
+    if isinstance(exc, httpx.HTTPStatusError):
+        code = exc.response.status_code
+        return "transient" if code == 429 or code >= 500 else "permanent"
+
+    if isinstance(exc, GitHubError):
+        text = str(exc)
+        if "rate limit" in text.lower():
+            return "transient"
+        return "permanent" if any(m in text for m in _PERMANENT_MARKERS) else "transient"
+
+    # Our own bugs: TypeError, ValueError, SQL errors, KeyError…
+    # These fail identically every time. Retrying burns money for nothing.
+    return "permanent"
 
 async def review_pr(ctx, job: dict):
     repo = job["repo"]
@@ -76,9 +105,24 @@ async def review_pr(ctx, job: dict):
         await mark_posted(delivery_id, comment_id)
 
     except Exception as e:
-        await mark_failed(delivery_id, str(e))
-        logger.error("Review of %s#%s failed: %s", repo, pr_number, e)
-        raise                       # let arq record the job as failed too
+        kind = classify_failure(e)
+        attempts = await record_failure(delivery_id, str(e), kind)
+
+        if kind == "permanent":
+            logger.error("Permanent failure on %s#%s — not retrying: %s",
+                         repo, pr_number, e)
+            raise                                    # arq records it; no retry
+
+        if attempts >= MAX_RETRIES:
+            logger.error("Giving up on %s#%s after %d attempts: %s",
+                         repo, pr_number, attempts, e)
+            raise
+
+        delay = 30 * (4 ** (attempts - 1))            # 30s, 2m, 8m
+        # delay = 2 * (4 ** (attempts - 1))     # 2s, 8s, 32s (TEST ONLY)
+        logger.warning("Transient failure on %s#%s — retry %d in %ds",
+                       repo, pr_number, attempts, delay)
+        raise Retry(defer=delay)                      # arq re-queues the job
 
     return {"pr_number": pr_number, "high": len(high), "low": len(low)}
 
@@ -99,3 +143,4 @@ class WorkerSettings:
     redis_settings = REDIS_SETTINGS
     on_startup = startup          # open the pool once when the worker starts
     on_shutdown = shutdown        # close it cleanly on exit
+    max_tries = MAX_RETRIES + 1

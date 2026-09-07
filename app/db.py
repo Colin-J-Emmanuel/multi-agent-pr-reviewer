@@ -174,3 +174,24 @@ async def mark_posted(delivery_id: str, comment_id: int) -> None:
             delivery_id, comment_id,
         )
     logger.info("Delivery %s posted as comment %s", delivery_id, comment_id)
+
+async def record_failure(delivery_id: str, error: str, kind: str) -> int:
+    """Record a failure, increment the attempt counter, return the new count."""
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        count = await conn.fetchval(
+            """
+            UPDATE deliveries
+               SET status = 'failed',
+                   retry_count = retry_count + 1,
+                   last_error = $2,
+                   failure_kind = $3,
+                   updated_at = now()
+             WHERE delivery_id = $1
+            RETURNING retry_count
+            """,
+            delivery_id, error[:2000], kind,
+        )
+    logger.warning("Delivery %s failed (%s, attempt %s): %s",
+                   delivery_id, kind, count, error)
+    return count
