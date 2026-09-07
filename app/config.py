@@ -12,6 +12,7 @@ class Settings(BaseSettings):
     langsmith_tracing: bool = False
     langsmith_api_key: str | None = None
     langsmith_project: str = "multi-agent-pr-reviewer"
+    daily_budget_usd: float = 5.00      # 0 disables the check
 
     model_config = SettingsConfigDict(
         env_file=".env", env_file_encoding="utf-8", extra="ignore"
@@ -21,6 +22,3 @@ class Settings(BaseSettings):
 @lru_cache
 def get_settings() -> Settings:
     return Settings()
-
-
-database_url: str = "postgresql://pruser:prpass@localhost:5432/prreviewer"

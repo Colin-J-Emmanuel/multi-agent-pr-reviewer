@@ -5,7 +5,8 @@ import httpx
 from app.queue import REDIS_SETTINGS
 from app.github_client import GitHubClient, GitHubError
 from app.graph import review_graph, PRState, compute_cost
-from app.db import get_pool, close_pool, save_review, mark_in_progress, mark_failed, mark_posted, record_failure
+from app.db import (get_pool, close_pool, save_review, mark_in_progress, 
+                    mark_failed, mark_posted, record_failure, spend_since)
 from app.render import render_comment
 from app.config import get_settings
 from app.github_client import GitHubError
@@ -46,6 +47,16 @@ async def review_pr(ctx, job: dict):
     delivery_id = job["delivery_id"]
     logger.info("Reviewing PR %s#%s", repo, pr_number)
 
+    settings = get_settings()
+    if settings.daily_budget_usd > 0:
+        spent = await spend_since(24)
+        if spent >= settings.daily_budget_usd:
+            logger.error(
+                "Budget ceiling reached ($%.4f of $%.2f in 24h) — skipping %s#%s",
+                spent, settings.daily_budget_usd, repo, pr_number,
+            )
+            return {"pr_number": pr_number, "skipped": "budget"}
+        
     # Record that we've started — BEFORE any slow work.
     await mark_in_progress(
         repo=repo, pr_number=pr_number,

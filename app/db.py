@@ -195,3 +195,17 @@ async def record_failure(delivery_id: str, error: str, kind: str) -> int:
     logger.warning("Delivery %s failed (%s, attempt %s): %s",
                    delivery_id, kind, count, error)
     return count
+
+async def spend_since(hours: int = 24) -> float:
+    """Total cost_usd over a recent window."""
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        total = await conn.fetchval(
+            """
+            SELECT COALESCE(SUM(cost_usd), 0)
+              FROM deliveries
+             WHERE created_at > now() - ($1 || ' hours')::interval
+            """,
+            str(hours),
+        )
+    return float(total)
