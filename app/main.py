@@ -1,13 +1,15 @@
 import hashlib
 import hmac
 import logging
-# import os
-
-from fastapi import FastAPI, Request, Header, HTTPException, status
 from contextlib import asynccontextmanager
+
 from arq import create_pool
-from app.queue import REDIS_SETTINGS
+
+# import os
+from fastapi import FastAPI, Header, HTTPException, Request, status
+
 from app.config import get_settings
+from app.queue import REDIS_SETTINGS
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("pr-reviewer")

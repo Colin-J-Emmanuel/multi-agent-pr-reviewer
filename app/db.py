@@ -1,10 +1,11 @@
-import logging
-import asyncpg
 import json
+import logging
+
+import asyncpg
 
 from app.config import get_settings
-from app.graph import Finding
 from app.embeddings import embed_texts, finding_text
+from app.graph import Finding
 
 logger = logging.getLogger("pr-reviewer.db")
 
@@ -61,21 +62,6 @@ async def mark_in_progress(
             )
     logger.info("Delivery %s marked in_progress (id=%s)", delivery_id, delivery_pk)
     return delivery_pk
-
-
-async def mark_failed(delivery_id: str, error: str) -> None:
-    """Record that a review failed, with the reason."""
-    pool = await get_pool()
-    async with pool.acquire() as conn:
-        await conn.execute(
-            """
-            UPDATE deliveries
-               SET status = 'failed', summary = $2, updated_at = now()
-             WHERE delivery_id = $1
-            """,
-            delivery_id, f"FAILED: {error}"[:2000],
-        )
-    logger.warning("Delivery %s marked failed: %s", delivery_id, error)
 
 async def save_review(
     *,

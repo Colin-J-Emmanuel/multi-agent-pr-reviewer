@@ -1,8 +1,8 @@
 import asyncio
 import sys
 
-from app.github_client import GitHubClient
 from app import graph
+from app.github_client import GitHubClient
 
 AGENTS = {
     "security": graph.security_agent,
