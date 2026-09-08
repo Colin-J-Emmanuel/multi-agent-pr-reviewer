@@ -16,7 +16,7 @@ jobs:
           cache: 'pip'
       - run: pip install -r requirements.txt -r requirements-dev.txt
       - name: Lint
-        run: ruff check app scripts
+        run: ruff check app scripts tests
       - name: Import check
         run: |
           python -c "import app.config, app.db, app.graph, app.github_client, app.render, app.worker, app.main; print('all modules import')"

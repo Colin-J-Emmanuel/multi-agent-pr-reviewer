@@ -83,7 +83,7 @@ class GitHubClient:
             raise GitHubError(f"404 Not Found: {path}")
         resp.raise_for_status()
         return resp.json()
-    
+
     async def fetch_pr(self, repo: str, pr_number: int) -> dict[str, Any]:
         async with httpx.AsyncClient(
             base_url=GITHUB_API, headers=self._headers, timeout=20
@@ -127,7 +127,7 @@ class GitHubClient:
             "files_skipped": skipped,
             "files": files,
         }
-    
+
     async def find_our_comment(self, repo: str, pr_number: int) -> int | None:
         """Return the id of a comment we previously posted, if any."""
         async with httpx.AsyncClient(

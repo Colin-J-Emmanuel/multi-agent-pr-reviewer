@@ -1,5 +1,5 @@
 line-length = 100
 
 [lint]
-select = ["E", "F", "I"]
-ignore = ["E501"]
+select = ["E", "F", "I", "W"]
+ignore = ["E501"]        # prompts are long strings; breaking them hurts readability

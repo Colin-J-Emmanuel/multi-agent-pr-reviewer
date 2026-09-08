@@ -173,10 +173,10 @@ async def _summarize(context, high: list[Finding], low: list[Finding]) -> tuple[
     except Exception as e:
         logger.warning("Summary generation failed: %s", e)
         return "(summary generation failed)", _extract_usage("aggregate", None)
-    
+
 async def aggregator(state: PRState) -> dict:
     high, low, dropped = tier_findings(state["findings"])
-    
+
     logger.info(
         "Aggregated: %d high, %d low-confidence, %d dropped as noise",
         len(high), len(low), dropped,
@@ -189,7 +189,7 @@ async def aggregator(state: PRState) -> dict:
         "summary": summary,
         "usage": [summary_usage],
     }
-    
+
 def build_review_graph():
     builder = StateGraph(PRState)
 

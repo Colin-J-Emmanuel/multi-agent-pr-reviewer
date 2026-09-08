@@ -63,7 +63,7 @@ async def review_pr(ctx, job: dict):
                 spent, settings.daily_budget_usd, repo, pr_number,
             )
             return {"pr_number": pr_number, "skipped": "budget"}
-        
+
     # Record that we've started — BEFORE any slow work.
     await mark_in_progress(
         repo=repo, pr_number=pr_number,
