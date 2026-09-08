@@ -4,7 +4,7 @@
 
 This is a hands-on study of **production system design for AI agents**: not "an LLM in a loop," but the reliability engineering around it — webhook verification, latency isolation, idempotency, verification gates, and cost control. Load-bearing components are hand-built for understanding; the goal is to learn *why* each production pattern exists, not just to wire one up.
 
-**Status: complete.** All seven phases are built and tested — ingestion, async pipeline, PR fetch, a four-agent graph with deterministic aggregation, a unified Postgres data layer with pgvector search, idempotent posting behind a confidence gate, and observability with tracing, verified cost accounting, bounded retries, and a spend ceiling. Every phase is broken into small, individually tested steps — see the [Build log](#build-log) for the full brick-by-brick decomposition, which doubles as a study map of the project.
+**Status: complete.** All seven phases are built and tested — ingestion, async pipeline, PR fetch, a four-agent graph with deterministic aggregation, a unified Postgres data layer with pgvector search, idempotent posting behind a confidence gate, and observability with tracing, verified cost accounting, bounded retries, and a spend ceiling. A GitHub Actions pipeline runs lint, import checks, and a unit-test suite on every pull request. Every phase is broken into small, individually tested steps — see the [Build log](#build-log) for the full brick-by-brick decomposition, which doubles as a study map of the project.
 
 ---
 
@@ -239,6 +239,7 @@ The project is built brick by brick — each step is implemented and tested in i
 - LangGraph + `langchain-anthropic`, Claude Sonnet 5 via the Anthropic API (agent graph)
 - LangSmith (tracing / observability)
 - Docker / Docker Compose (local Redis + Postgres)
+- `pytest` + `ruff`, run in GitHub Actions on every PR
 
 ---
 
@@ -343,6 +344,17 @@ docker exec -it pr-reviewer-postgres psql -U pruser -d prreviewer -P pager=off -
      FROM deliveries ORDER BY id;"
 ```
 
+### Development
+
+```bash
+pip install -r requirements-dev.txt
+
+python -m pytest                    # 16 unit tests, no secrets required (~1.5s)
+ruff check app scripts tests
+```
+
+CI runs all three of these on every push to `main` and every pull request.
+
 ---
 
 ## Design decisions
@@ -371,6 +383,8 @@ The choices worth explaining, and why they were made:
 - **Cost accounting in our own database, cross-checked against a second source.** LangSmith already reports cost, but its traces expire after 14 days and can't be joined against findings. Recording usage in Postgres makes spend history durable and queryable — and comparing the two exposed a real 50% error in the price constants that no amount of self-inspection would have caught.
 - **Classify failures before retrying, and default to "permanent."** Retrying a `404` or a `TypeError` cannot succeed; it only burns money. Unrecognized exceptions are treated as permanent precisely because our own bugs fail identically every time — the conservative default means a mistake costs one lost review rather than an unbounded loop. Retry is capped and backed off on top of that.
 - **Check the budget before the work, not after.** A ceiling evaluated after the LLM calls is an accounting note, not a control. Checking before `mark_in_progress` means an over-budget delivery costs one cheap SQL query and nothing else.
+- **Only the deterministic core is unit-tested — deliberately.** `tier_findings`, `classify_failure`, and the diff-budget helpers are pure functions with no network, database, or model calls, so the suite needs no secrets and runs in about a second. That falls out of keeping decisions in Python and letting the LLM only narrate: the parts that *decide* are testable, and the parts that call Claude don't need to be. Testability pressure also improved the structure — `tier_findings()` was extracted out of the aggregator node precisely so the tiering logic could be tested without an LLM call.
+- **Tests assert policy, not implementation.** Each test is named and documented for the decision it protects (`test_our_own_bugs_are_permanent`, `test_demoted_findings_are_kept_not_discarded`, `test_exactly_at_noise_floor_is_kept`) rather than restating the code. A test that mirrors the implementation fails whenever the code changes and catches nothing; these fail only when a *policy* changes, and the docstring tells the next reader what they are about to break.
 - **Separate, single-purpose processes.** Receiver and worker are distinct so they can fail, scale, and be reasoned about independently.
 - **Pinned dependencies + Dependabot.** `requirements.txt` pins exact versions for reproducible builds; Dependabot opens grouped bump PRs so pins don't rot.
 
@@ -380,10 +394,19 @@ The choices worth explaining, and why they were made:
 - **A budget skip leaves no delivery row.** Because the check runs before `mark_in_progress`, a skipped review is visible in the logs but not queryable in Postgres — the one lifecycle state that isn't durable.
 - **Price constants are hardcoded and unvalidated.** `PRICE_INPUT_PER_M` / `PRICE_OUTPUT_PER_M` are pinned to Claude Sonnet 5 at a point in time, with nothing checking them at runtime. When they were wrong, the `cost_usd` column was silently wrong by ~50% while looking authoritative — only an external cross-check revealed it. Changing `MODEL` means revisiting them.
 - **A failed post marks the whole delivery failed.** Posting sits inside the review's `try`, so a review that computed, persisted, and posted correctly but failed on the final bookkeeping write is recorded as `failed`. Honest, but coarse: "review succeeded, side effect failed" is not yet its own state.
+- **The database layer is untested.** `record_failure`, `save_review`, and `mark_posted` have no coverage, because they need a live Postgres. Covering them means adding a service container to the CI job and writing integration tests against a real database — worth doing, but a different class of test from the pure-function suite that exists today.
+- **`classify_failure`'s HTTP-status branch is untested.** The 5xx / 429 path via `httpx.HTTPStatusError` needs a constructed response object to exercise; every other branch is covered.
 - **Findings predating Phase 5e have no embeddings** and are invisible to semantic search; there is no backfill script yet. Related smell: because the search filters on `embedding IS NOT NULL`, "nothing has been embedded" and "no similar findings" return the same empty result.
 - **Embedding happens inside the review transaction.** A slow model load or embed call holds the database transaction open. Invisible at this volume; would move outside the transaction (or into a background step) if throughput mattered.
-- **The noise floor is untested.** No finding has yet come back below `confidence < 0.3`, so the drop branch in the aggregator has never executed in practice.
 - **Model/client constructed per call.** `GitHubClient` and `ChatAnthropic` are built fresh on each job (no connection reuse). Invisible at this volume; would be hoisted into worker startup if throughput ever mattered. The Postgres pool and the embedding model, by contrast, *are* loaded once and reused.
+
+---
+
+## A note on the reviewer reviewing itself
+
+Once the system could post to pull requests, it was pointed at the repository's own PRs. On the PR that added CI, it flagged — correctly — that `pytest` was listed in `requirements-dev.txt` but never executed by the workflow, and that a function had been deleted with nothing verifying its replacement behaved the same. The next PR closed that gap, and the review of *that* PR returned no high-confidence findings but suggested boundary tests at exactly `HIGH_CONFIDENCE` and `NOISE_FLOOR`, which were added.
+
+Two things about that loop are worth recording. The findings were real rather than generic, and the confidence scores tracked their seriousness — a blocking gap on the first PR, refinements on the second. And the deterministic CI check and the semantic review caught entirely different classes of problem on the same commit: lint and imports passed cleanly while the workflow was still missing a test step.
 
 ---
 
@@ -397,4 +420,4 @@ Architecture inspired by the freeCodeCamp course *"Learn System Design for AI Ag
 
 ## Author
 
-Colin J. Emmanuel — [@Colin-J-Emmanuel](https://github.com/Colin-J-Emmanuel)
+Colin Emmanuel — [@Colin-J-Emmanuel](https://github.com/Colin-J-Emmanuel)
