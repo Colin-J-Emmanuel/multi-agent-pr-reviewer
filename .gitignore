@@ -46,6 +46,7 @@ coverage.xml
 .dmypy.json
 .ruff_cache/
 .pyre/
+.pytest_cache/
 
 # ---- Jupyter ----
 .ipynb_checkpoints/

@@ -139,6 +139,16 @@ def _sort_key(f: Finding):
     order = {"high": 0, "medium": 1, "low": 2}
     return (order[f.severity], -f.confidence)   # severe first, then most confident
 
+def tier_findings(findings: list[Finding]) -> tuple[list[Finding], list[Finding], int]:
+    """Deduplicate and split findings into (high, low, dropped_count)."""
+    unique = _dedupe(findings)
+    high = sorted([f for f in unique if f.confidence >= HIGH_CONFIDENCE], key=_sort_key)
+    low = sorted(
+        [f for f in unique if NOISE_FLOOR <= f.confidence < HIGH_CONFIDENCE],
+        key=_sort_key,
+    )
+    return high, low, len(unique) - len(high) - len(low)
+
 SUMMARY_PROMPT = """You are the lead reviewer writing a short summary of a PR review.
 You are given findings already triaged by specialist agents. Write 2–4 sentences for the PR author: lead with the most important issues, be direct and specific, and don't invent problems not in the findings. If there are no high-confidence findings, say the PR looks clean and note any minor points briefly."""
 
@@ -165,16 +175,8 @@ async def _summarize(context, high: list[Finding], low: list[Finding]) -> tuple[
         return "(summary generation failed)", _extract_usage("aggregate", None)
     
 async def aggregator(state: PRState) -> dict:
-    findings = _dedupe(state["findings"])
-
-    high = sorted([f for f in findings if f.confidence >= HIGH_CONFIDENCE], key=_sort_key)
-    low = sorted(
-        [f for f in findings if NOISE_FLOOR <= f.confidence < HIGH_CONFIDENCE],
-        key=_sort_key,
-    )
-    # below NOISE_FLOOR is dropped entirely
-    dropped = len(findings) - len(high) - len(low)
-
+    high, low, dropped = tier_findings(state["findings"])
+    
     logger.info(
         "Aggregated: %d high, %d low-confidence, %d dropped as noise",
         len(high), len(low), dropped,

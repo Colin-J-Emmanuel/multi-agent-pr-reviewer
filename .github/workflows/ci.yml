@@ -22,3 +22,5 @@ jobs:
           python -c "import app.config, app.db, app.graph, app.github_client, app.render, app.worker, app.main; print('all modules import')"
         env:
           GITHUB_WEBHOOK_SECRET: ci-dummy-secret
+      - name: Tests
+        run: python -m pytest
