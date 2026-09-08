@@ -1,10 +1,12 @@
 import logging
-from langchain_anthropic import ChatAnthropic
-from app.config import get_settings
-from typing import Annotated, Literal, TypedDict
 from operator import add
+from typing import Annotated, Literal, TypedDict
+
+from langchain_anthropic import ChatAnthropic
+from langgraph.graph import END, START, StateGraph
 from pydantic import BaseModel, Field
-from langgraph.graph import StateGraph, START, END
+
+from app.config import get_settings
 
 logger = logging.getLogger("pr-reviewer.agents")
 MODEL = "claude-sonnet-5"        # balance of cost/quality; haiku=cheaper, opus=sharper

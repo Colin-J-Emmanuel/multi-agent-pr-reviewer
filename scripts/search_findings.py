@@ -1,7 +1,7 @@
 import asyncio
 import sys
 
-from app.db import search_similar_findings, close_pool
+from app.db import close_pool, search_similar_findings
 
 
 async def main(query: str) -> None:
