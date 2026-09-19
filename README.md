@@ -154,6 +154,13 @@ Record comment id + posted_at                                              ✅
 On failure: classify → retry transient with backoff, stop permanent        ✅
 Every LLM call traced to LangSmith; usage and cost recorded per delivery    ✅
 ```
+![Architecture diagram: parallel fan-out to four review agents, then fan-in to an aggregator](docs/images/architecture.png)
+
+*On each PR, the security, quality, testing, and docs agents fan out from a single entry point and run independently, then converge on an aggregator that dedupes findings, tiers them by confidence, and writes the summary.*
+
+![LangSmith waterfall of one review run showing four agents running concurrently](docs/images/langsmith-trace.png)
+
+*One review run traced in LangSmith: the four specialist agents execute concurrently from t=0; the aggregator runs only after all four finish. Total wall-clock 8.3s versus ~21s if they ran sequentially.*
 
 Five ideas carry the design:
 
