@@ -113,6 +113,11 @@ Every LLM call in the shaded worker box is traced to LangSmith, and its token co
 
 ## Architecture
 
+<p style="text-align: center;">
+  <img src="docs/images/architecture.png" alt="Architecture diagram: parallel fan-out then fan-in" width="600"><br>
+  <em>On each PR, the four specialist agents fan out, run independently, then converge on the aggregator.</em>
+</p>
+
 The same pipeline as a build map. `✅` = built and tested:
 
 ```
