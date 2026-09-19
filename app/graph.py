@@ -209,5 +209,4 @@ def build_review_graph():
 
     return builder.compile()
 
-
 review_graph = build_review_graph()
